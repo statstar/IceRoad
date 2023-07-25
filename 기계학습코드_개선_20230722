@@ -1,0 +1,167 @@
+f.data2 %>% head
+
+head(f.data2)
+f.data2$y %>% table
+
+install.packages("C:/Users/Z6G4/Downloads/DMwR_0.4.1.tar.gz", repos = NULL, type = "source")
+library(DMwR)
+
+str(f.data2)
+
+f.data2$rws <-f.data2$rws %>% as.numeric
+f.data2$ta1 <-f.data2$ta1 %>% as.numeric 
+f.data2$rh1 <-f.data2$rh1 %>% as.numeric 
+f.data2$pressure <-f.data2$pressure %>% as.numeric 
+f.data2$s_ta <-f.data2$s_ta %>% as.numeric 
+
+f.data2 %>% filter(!is.na(rws)&!is.na(ta1) & !is.na(rh1) & !is.na(pressure) & !is.na(s_ta)) -> f.data3
+# reducing data  ----------------------------------------------------------
+
+f.data2 %>% 
+  count(y) %>% 
+  ggplot(aes(x=y, y=n, fill=y, label=n))+geom_col()+
+  geom_text(vjust=-0.5)+theme_classic()
+  
+
+1/(f.data2$y %>% table/sum(f.data2$y %>% table)) /3200
+create.data <- function(seed){
+  set.seed(seed)
+  data1 <- f.data3 %>% filter(y=="severe") %>% slice_sample(.,n=round(1129*0.94))
+  data2 <- f.data3 %>% filter(y=="alert") %>% slice_sample(.,n=round(24738*0.04))
+  data3 <- f.data3 %>% filter(y=="caution") %>% slice_sample(.,n=round(88346*0.011))
+  data4 <- f.data3 %>% filter(y=="watch") %>% slice_sample(.,n=round(3274180*0.001))
+  rbind(data1, data2, data3, data4) %>% return
+}
+
+sam.d1 <- create.data(1237)
+sam.d2 <- create.data(2436)
+sam.d3 <- create.data(3481)
+sam.d4 <- create.data(3217)
+sam.d5 <- create.data(548373)
+
+rbind(sam.d1 %>% mutate(sim=1), 
+      sam.d2%>% mutate(sim=2), 
+      sam.d3%>% mutate(sim=3), 
+      sam.d4%>% mutate(sim=4),
+      sam.d4%>% mutate(sim=5)) -> sim.data
+
+library(ggplot2)
+
+ggplot(sim.data, aes(x=ta1, y=p_ta_0))+
+  geom_point(alpha=0.2, size=0.4)+stat_smooth(method="gam", formula= y~s(x, k=3))+
+  facet_grid(.~roadname)+theme_classic()
+
+ggplot(sim.data, aes(x=rh1, y=p_rh_0))+
+  geom_point(alpha=0.1, size=0.3)+stat_smooth(method="gam", formula= y~s(x, k=3))+
+  facet_grid(.~roadname)+theme_classic()
+
+library(mgcv)
+m1 <- gam(p_ta_0 ~ s(ta1, k=3), data=sim.data)
+m2 <- gam(p_rh_0 ~ s(rh1, k=3), data=sim.data)
+
+cor(as.numeric(sim.data$p_ta_0), sim.data$ta1)
+cor(m1$fitted.values, sim.data$ta1)
+
+cor(as.numeric(sim.data$p_rh_0), sim.data$rh1)
+cor(m2$fitted.values, sim.data$rh1)
+
+sim.data$adj_ta_0 <- m1$fitted.values
+sim.data$adj_rh_0 <- m2$fitted.values
+
+library(caret)
+library("doParallel")
+cl <- makePSOCKcluster(50)
+registerDoParallel(cl)
+
+set.seed(3434)
+sel <- sample(1:nrow(sim.data), floor(nrow(sim.data)*0.7))
+
+t.train <- sim.data[sel,]
+t.test <- sim.data[-sel,]
+
+for(iter in 1:5){
+
+train=t.train[t.train$sim==iter,]
+test=t.test[t.test$sim==iter,]  
+
+
+fitControl <- trainControl(method = "repeatedcv", number = 10, repeats = 5, search = "random")
+
+rf_fit1 <- train(y ~ glatitude + glongitude + rot_angle2 + LANES+ROAD_TYPE + 
+                   CONNECT + p_ta_0 + p_rh_0, data = train, 
+                 method = "rf", trControl = fitControl, tuneLength = 10, verbose = F)
+
+rf_fit2 <- train(y ~ svf + angleX + angleY + Height + direction + 
+                   rot_angle2 + LANES+ ROAD_TYPE + CONNECT + 
+                   중규모 + 국지규모+
+                   pca_ta1 + pca_ta2 + p_ta_0 +
+                   pca_rh1 + pca_rh2 + p_rh_0, data = train, 
+                 method = "rf", trControl = fitControl, tuneLength = 10, verbose = F)
+
+rf_fit3 <- train(y ~ svf + angleX + angleY + Height + direction + 
+                   rot_angle2 + LANES+ ROAD_TYPE + CONNECT + 
+                   중규모 + 국지규모+
+                   pca_ta1 + pca_ta2 + adj_ta_0 +
+                   pca_rh1 + pca_rh2 + adj_rh_0, data = train, 
+                 method = "rf", trControl = fitControl, tuneLength = 10, verbose = F)
+
+# mlp_fit1 <- train(y ~ glatitude + glongitude + rot_angle2 + LANES+ROAD_TYPE + 
+#                    CONNECT + p_ta_0 + p_rh_0, data = train, 
+#                  method = "mlpKerasDropoutCost", trControl = fitControl, tuneLength = 100, verbose = F)
+# 
+# mlp_fit2 <- train(y ~ svf + angleX + angleY + Height + direction + 
+#                    rot_angle2 + LANES+ ROAD_TYPE + CONNECT + 
+#                    중규모 + 국지규모+
+#                    pca_ta1 + pca_ta2 + p_ta_0 +
+#                    pca_rh1 + pca_rh2 + p_rh_0, data = train, 
+#                  method = "mlpKerasDropoutCost", trControl = fitControl, tuneLength = 100, verbose = F)
+# 
+# mlp_fit3 <- train(y ~ svf + angleX + angleY + Height + direction + 
+#                    rot_angle2 + LANES+ ROAD_TYPE + CONNECT + 
+#                    중규모 + 국지규모+
+#                    pca_ta1 + pca_ta2 + adj_ta_0 +
+#                    pca_rh1 + pca_rh2 + adj_rh_0, data = train, 
+#                  method = "mlpKerasDropoutCost", trControl = fitControl, tuneLength = 100, verbose = F)
+
+
+confusionMatrix(predict(rf_fit1, test), test$y)
+confusionMatrix(predict(rf_fit2, test), test$y)
+confusionMatrix(predict(rf_fit3, test), test$y)
+
+save(train, test, rf_fit1, rf_fit2, rf_fit3,  file=paste0("D:/도로기상/sim_",iter,".rda"))
+# save(train, test, rf_fit1, rf_fit2, rf_fit3, mlp_fit1, mlp_fit2, mlp_fit3, file=paste0("D:/도로기상/sim_",iter,".rda"))
+}
+stopCluster(cl)
+
+load(file=paste0("D:/도로기상/sim_",i,".rda"))
+
+rf_fit1$results %>% write_clip
+rf_fit2$results %>% write_clip
+rf_fit3$results %>% write_clip
+
+confusionMatrix(predict(rf_fit1, test), test$y)$table %>% write_clip
+confusionMatrix(predict(rf_fit2, test), test$y)$table %>% write_clip
+confusionMatrix(predict(rf_fit3, test), test$y)$table %>% write_clip
+
+r.mtx <- data.frame()
+for(i in 1:5){
+load(file=paste0("D:/도로기상/sim_",i,".rda"))
+
+rbind(data.frame(overall=confusionMatrix(predict(rf_fit1, test), test$y)$overall) %>% mutate(sim=paste0("sim",i)) %>% mutate(model="model1"),
+      data.frame(overall=confusionMatrix(predict(rf_fit2, test), test$y)$overall) %>% mutate(sim=paste0("sim",i)) %>% mutate(model="model2"),
+      data.frame(overall=confusionMatrix(predict(rf_fit3, test), test$y)$overall)%>% mutate(sim=paste0("sim",i)) %>% mutate(model="model3")) -> bind.result
+
+r.mtx <- rbind(r.mtx, bind.result)
+}
+
+rownames(r.mtx)[1:7]
+r.mtx %>% mutate(measure=rep(rownames(r.mtx)[1:7],15)) -> r.mtx
+
+head(r.mtx)
+library(tidyr)
+r.mtx %>% pivot_wider(id_cols=c("sim","model"), names_from="measure", values_from = "overall") %>% write_clip
+
+varImp(rf_fit1) %>% plot
+varImp(rf_fit2) %>% plot
+varImp(rf_fit3) %>% plot
+
